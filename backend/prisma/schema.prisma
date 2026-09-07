@@ -1,0 +1,337 @@
+// Prisma schema for Student Accommodation Finder
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------
+// ENUMS
+// ------------------------------
+
+enum Role {
+  STUDENT
+  LANDLORD
+  ADMIN
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum AccommodationType {
+  STUDENT_RESIDENCE
+  ROOM
+  SHARED_ROOM
+  APARTMENT
+  BACHELOR
+  STUDIO
+  HOUSE
+  SHARED_HOUSE
+  TOWNHOUSE
+  OTHER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AvailabilityStatus {
+  AVAILABLE
+  LIMITED
+  FULL
+  UNAVAILABLE
+}
+
+enum EnquiryStatus {
+  OPEN
+  RESPONDED
+  CLOSED
+}
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+}
+
+enum ReportReason {
+  SUSPICIOUS_FRAUDULENT
+  INCORRECT_INFORMATION
+  INAPPROPRIATE_CONTENT
+  ALREADY_OCCUPIED
+  DUPLICATE_LISTING
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  INVESTIGATING
+  RESOLVED
+  DISMISSED
+}
+
+enum NotificationType {
+  ENQUIRY_RECEIVED
+  ENQUIRY_RESPONDED
+  NEW_MESSAGE
+  LISTING_APPROVED
+  LISTING_REJECTED
+  LISTING_SUBMITTED
+  NEW_REVIEW
+  REPORT_SUBMITTED
+  REPORT_RESOLVED
+  LANDLORD_VERIFIED
+  LANDLORD_REJECTED
+  LANDLORD_REGISTERED
+  SYSTEM
+}
+
+// ------------------------------
+// MODELS
+// ------------------------------
+
+model User {
+  id                 String              @id @default(uuid())
+  email              String              @unique
+  passwordHash       String
+  role               Role
+  firstName          String
+  lastName           String
+  phoneNumber        String?
+  profileImageUrl    String?
+  isSuspended        Boolean             @default(false)
+
+  // Student-specific
+  campusId           String?
+  campus             Campus?             @relation(fields: [campusId], references: [id])
+
+  // Landlord-specific
+  businessName       String?
+  verificationStatus VerificationStatus? // null for students/admins
+
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  listings           Listing[]           @relation("LandlordListings")
+  favourites         Favourite[]
+  enquiriesAsStudent Enquiry[]           @relation("StudentEnquiries")
+  enquiriesAsLandlord Enquiry[]          @relation("LandlordEnquiries")
+  conversationsAsStudent Conversation[]  @relation("StudentConversations")
+  conversationsAsLandlord Conversation[] @relation("LandlordConversations")
+  messages           Message[]
+  reviews            Review[]
+  reports            Report[]           @relation("ReporterReports")
+  resolvedReports    Report[]           @relation("ResolvedReports")
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+
+  @@index([role])
+  @@index([campusId])
+}
+
+model Campus {
+  id          String    @id @default(uuid())
+  name        String
+  institution String
+  address     String
+  latitude    Float
+  longitude   Float
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  users       User[]
+  listings    Listing[]
+
+  @@unique([name, institution])
+}
+
+model Listing {
+  id                  String              @id @default(uuid())
+  ownerId             String
+  owner               User                @relation("LandlordListings", fields: [ownerId], references: [id], onDelete: Cascade)
+  campusId            String
+  campus              Campus              @relation(fields: [campusId], references: [id])
+
+  title               String
+  description         String
+  accommodationType   AccommodationType
+  pricePerMonth        Decimal            @db.Decimal(10, 2)
+
+  address             String
+  latitude            Float
+  longitude           Float
+  distanceFromCampus  Float?              // km, calculated server-side
+
+  totalRooms          Int
+  availableRooms      Int
+  amenities           String[]            @default([])
+
+  availabilityStatus  AvailabilityStatus  @default(AVAILABLE)
+  approvalStatus      ApprovalStatus      @default(PENDING)
+  rejectionReason     String?
+
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  photos              ListingPhoto[]
+  favourites          Favourite[]
+  enquiries           Enquiry[]
+  conversations       Conversation[]
+  reviews             Review[]
+  reports             Report[]
+
+  @@index([campusId])
+  @@index([ownerId])
+  @@index([approvalStatus])
+  @@index([availabilityStatus])
+  @@index([accommodationType])
+  @@index([pricePerMonth])
+}
+
+model ListingPhoto {
+  id        String   @id @default(uuid())
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  url       String
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([listingId])
+}
+
+model Favourite {
+  id        String   @id @default(uuid())
+  studentId String
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([studentId, listingId])
+  @@index([listingId])
+}
+
+model Enquiry {
+  id             String        @id @default(uuid())
+  studentId      String
+  student        User          @relation("StudentEnquiries", fields: [studentId], references: [id], onDelete: Cascade)
+  landlordId     String
+  landlord       User          @relation("LandlordEnquiries", fields: [landlordId], references: [id], onDelete: Cascade)
+  listingId      String
+  listing        Listing       @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  conversationId String?       @unique
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  message        String
+  status         EnquiryStatus @default(OPEN)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([landlordId])
+  @@index([studentId])
+  @@index([listingId])
+}
+
+model Conversation {
+  id         String              @id @default(uuid())
+  listingId  String
+  listing    Listing             @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  studentId  String
+  student    User                @relation("StudentConversations", fields: [studentId], references: [id], onDelete: Cascade)
+  landlordId String
+  landlord   User                @relation("LandlordConversations", fields: [landlordId], references: [id], onDelete: Cascade)
+  status     ConversationStatus  @default(OPEN)
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  enquiry    Enquiry?
+  messages   Message[]
+
+  @@unique([listingId, studentId, landlordId])
+  @@index([studentId])
+  @@index([landlordId])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  content        String
+  isRead         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  studentId String
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, listingId])
+  @@index([listingId])
+}
+
+model Report {
+  id           String       @id @default(uuid())
+  reporterId   String
+  reporter     User         @relation("ReporterReports", fields: [reporterId], references: [id], onDelete: Cascade)
+  listingId    String
+  listing      Listing      @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  reason       ReportReason
+  description  String?
+  status       ReportStatus @default(PENDING)
+  createdAt    DateTime     @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?
+  resolvedBy   User?        @relation("ResolvedReports", fields: [resolvedById], references: [id])
+
+  @@index([listingId])
+  @@index([status])
+}
+
+model Notification {
+  id               String           @id @default(uuid())
+  userId           String
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type             NotificationType
+  title            String
+  message          String
+  isRead           Boolean          @default(false)
+  relatedEntityType String?
+  relatedEntityId  String?
+  createdAt        DateTime         @default(now())
+
+  @@index([userId])
+  @@index([userId, isRead])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+}
